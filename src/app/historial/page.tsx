@@ -36,22 +36,46 @@ export default function HistorialPage() {
   const [submissions, setSubmissions] = useState<SubmissionWithItems[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [filterName, setFilterName] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [userName, setUserName] = useState('');
+  const [nameConfirmed, setNameConfirmed] = useState(false);
+  const [knownNames, setKnownNames] = useState<string[]>([]);
 
   useEffect(() => {
-    loadSubmissions();
+    // Try to load saved name
+    const saved = localStorage.getItem('shake_expense_name');
+    if (saved) {
+      setUserName(saved);
+      setNameConfirmed(true);
+    }
+    const names = JSON.parse(localStorage.getItem('shake_expense_known_names') || '[]');
+    setKnownNames(names);
   }, []);
+
+  useEffect(() => {
+    if (nameConfirmed && userName) {
+      loadSubmissions();
+    }
+  }, [nameConfirmed, userName]);
 
   async function loadSubmissions() {
     setLoading(true);
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('expense_submissions')
       .select('*')
+      .ilike('submitted_by', userName.trim())
       .order('submitted_at', { ascending: false });
 
     if (data) setSubmissions(data);
     setLoading(false);
+  }
+
+  function handleConfirmName(e: React.FormEvent) {
+    e.preventDefault();
+    if (userName.trim()) {
+      localStorage.setItem('shake_expense_name', userName.trim());
+      setNameConfirmed(true);
+    }
   }
 
   async function toggleExpand(id: string) {
@@ -60,7 +84,6 @@ export default function HistorialPage() {
       return;
     }
 
-    // Load items for this submission
     const sub = submissions.find((s) => s.id === id);
     if (sub && !sub.items) {
       const { data: items } = await supabase
@@ -90,30 +113,70 @@ export default function HistorialPage() {
   }
 
   const filtered = submissions.filter((s) => {
-    if (filterName && !s.submitted_by.toLowerCase().includes(filterName.toLowerCase()))
-      return false;
     if (filterStatus && s.status !== filterStatus) return false;
     return true;
   });
 
+  // If no name confirmed yet, show name input
+  if (!nameConfirmed) {
+    return (
+      <div className="max-w-md mx-auto mt-16">
+        <h1 className="text-2xl font-bold text-gray-900 mb-2 text-center">
+          Mis gastos
+        </h1>
+        <p className="text-gray-500 text-center mb-8">
+          Ingresá tu nombre para ver tus rendiciones.
+        </p>
+        <form onSubmit={handleConfirmName} className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Tu nombre
+          </label>
+          <input
+            type="text"
+            value={userName}
+            onChange={(e) => setUserName(e.target.value)}
+            placeholder="Nombre y apellido"
+            list="known-names-historial"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none mb-4"
+            required
+          />
+          <datalist id="known-names-historial">
+            {knownNames.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+          <button
+            type="submit"
+            className="w-full py-2.5 bg-brand-500 text-white font-semibold rounded-lg hover:bg-brand-600 transition-colors text-sm"
+          >
+            Ver mis gastos
+          </button>
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-4xl mx-auto">
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Historial de gastos</h1>
-        <p className="text-gray-500 mt-1">
-          Consultá todas las rendiciones de gastos enviadas.
-        </p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Mis gastos</h1>
+            <p className="text-gray-500 mt-1">
+              Rendiciones de <strong>{userName}</strong>.{' '}
+              <button
+                onClick={() => { setNameConfirmed(false); setSubmissions([]); }}
+                className="text-brand-500 hover:text-brand-700 underline"
+              >
+                Cambiar
+              </button>
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* Filters */}
       <div className="flex flex-wrap gap-4 mb-6">
-        <input
-          type="text"
-          placeholder="Filtrar por nombre..."
-          value={filterName}
-          onChange={(e) => setFilterName(e.target.value)}
-          className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none"
-        />
         <select
           value={filterStatus}
           onChange={(e) => setFilterStatus(e.target.value)}
@@ -130,7 +193,7 @@ export default function HistorialPage() {
         <div className="text-center py-12 text-gray-400">Cargando...</div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-12 text-gray-400">
-          No se encontraron rendiciones.
+          No tenés rendiciones registradas con este nombre.
         </div>
       ) : (
         <div className="space-y-3">
@@ -149,9 +212,6 @@ export default function HistorialPage() {
                 >
                   <div className="flex items-center gap-4">
                     <div>
-                      <p className="text-sm font-semibold text-gray-900">
-                        {sub.submitted_by}
-                      </p>
                       <p className="text-xs text-gray-400">
                         {new Date(sub.submitted_at).toLocaleDateString('es-AR', {
                           day: '2-digit',

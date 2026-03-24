@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { supabase, ExpenseSubmission } from '@/lib/supabase';
 import Link from 'next/link';
+import * as XLSX from 'xlsx';
 
 type ItemSummary = {
   id: string;
@@ -117,6 +118,52 @@ export default function AdminPage() {
     return data.publicUrl;
   }
 
+  async function exportToExcel() {
+    // Fetch all items with details for export
+    const { data: items } = await supabase
+      .from('expense_items')
+      .select(`
+        *,
+        expense_submissions!inner ( submitted_by, submitted_at, status ),
+        areas ( name, divisions:division_id ( name ) ),
+        clients ( name )
+      `)
+      .order('expense_date', { ascending: false });
+
+    if (!items || items.length === 0) {
+      alert('No hay datos para exportar');
+      return;
+    }
+
+    const rows = items.map((item: any) => ({
+      'Fecha gasto': item.expense_date,
+      'Enviado por': item.expense_submissions?.submitted_by || '',
+      'Fecha envío': item.expense_submissions?.submitted_at ? new Date(item.expense_submissions.submitted_at).toLocaleDateString('es-AR') : '',
+      'Estado': item.expense_submissions?.status === 'approved' ? 'Aprobado' : item.expense_submissions?.status === 'rejected' ? 'Rechazado' : 'Pendiente',
+      'Proveedor': item.provider,
+      'Monto': Number(item.amount),
+      'Moneda': item.currency,
+      'División': item.areas?.divisions?.name || '',
+      'Área': item.areas?.name || '',
+      'Cliente': item.clients?.name || '',
+      'Medio de pago': PAYMENT_LABELS[item.payment_method] || item.payment_method,
+      'Descripción': item.description,
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Gastos');
+
+    // Auto-width columns
+    const colWidths = Object.keys(rows[0]).map((key) => ({
+      wch: Math.max(key.length, ...rows.map((r: any) => String(r[key] || '').length)).toString().length + 4,
+    }));
+    ws['!cols'] = colWidths;
+
+    const today = new Date().toISOString().split('T')[0];
+    XLSX.writeFile(wb, `gastos-shake-${today}.xlsx`);
+  }
+
   if (!authenticated) {
     return (
       <div className="max-w-sm mx-auto mt-20">
@@ -156,7 +203,13 @@ export default function AdminPage() {
             Aprobá o rechazá rendiciones de gastos.
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={exportToExcel}
+            className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+          >
+            Exportar a Excel
+          </button>
           <Link
             href="/admin/clientes"
             className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
