@@ -102,6 +102,7 @@ export default function AdminPage() {
       .eq('id', id);
 
     if (!error) {
+      const sub = submissions.find((s) => s.id === id);
       setSubmissions((prev) =>
         prev.map((s) =>
           s.id === id
@@ -109,6 +110,18 @@ export default function AdminPage() {
             : s
         )
       );
+      // Sync status to Google Sheets (fire-and-forget)
+      if (sub) {
+        fetch('/api/sync-sheets-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            submitted_by: sub.submitted_by,
+            submitted_at: sub.submitted_at,
+            new_status: status === 'approved' ? 'Aprobado' : 'Rechazado',
+          }),
+        }).catch(() => {});
+      }
     }
     setActionLoading(null);
   }
