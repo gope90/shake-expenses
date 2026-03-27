@@ -164,7 +164,12 @@ export default function HomePage() {
 
         // Upload files
         for (const file of row.files) {
-          const filePath = `${submission.id}/${item.id}/${Date.now()}_${file.name}`;
+          // Sanitize filename: remove accents, replace spaces & special chars
+          const sanitized = file.name
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove accents
+            .replace(/[^a-zA-Z0-9._-]/g, '_') // replace special chars with underscore
+            .replace(/_+/g, '_'); // collapse multiple underscores
+          const filePath = `${submission.id}/${item.id}/${Date.now()}_${sanitized}`;
           const { error: uploadError } = await supabase.storage
             .from('receipts')
             .upload(filePath, file);
@@ -180,6 +185,48 @@ export default function HomePage() {
           });
         }
       }
+
+      // Sync to Google Sheets (best-effort, don't block submission)
+      try {
+        const paymentLabels: Record<string, string> = {
+          corporate_card: 'Tarjeta corporativa',
+          cash: 'Efectivo',
+          personal_card: 'Tarjeta personal',
+        };
+        const sheetsPayload = rows.map((row) => {
+          // Resolve area name
+          let areaName = '';
+          let divisionName = '';
+          for (const group of groupedAreas) {
+            const found = group.areas.find((a) => a.id === row.area_id);
+            if (found) {
+              areaName = found.name;
+              divisionName = group.division.name;
+              break;
+            }
+          }
+          // Resolve client name
+          const client = clients.find((c) => c.id === row.client_id);
+          return {
+            submitted_by: submittedBy.trim(),
+            submitted_at: new Date().toISOString(),
+            expense_date: row.expense_date,
+            provider: row.provider.trim(),
+            amount: parseFloat(row.amount),
+            currency: row.currency,
+            division: divisionName,
+            area: areaName,
+            client: client?.name || row.client_other || '',
+            payment_method: paymentLabels[row.payment_method] || row.payment_method,
+            description: row.description.trim(),
+          };
+        });
+        fetch('/api/sync-sheets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: sheetsPayload }),
+        }).catch(() => {}); // fire-and-forget
+      } catch {}
 
       // Save name for future use
       localStorage.setItem('shake_expense_name', submittedBy.trim());
