@@ -141,7 +141,8 @@ export default function HomePage() {
 
       if (subError) throw subError;
 
-      // Create items
+      // Create items and collect file URLs per row
+      const rowFileUrls: string[][] = [];
       for (const row of rows) {
         const { data: item, error: itemError } = await supabase
           .from('expense_items')
@@ -163,6 +164,7 @@ export default function HomePage() {
         if (itemError) throw itemError;
 
         // Upload files
+        const urls: string[] = [];
         for (const file of row.files) {
           // Sanitize filename: remove accents, replace spaces & special chars
           const sanitized = file.name
@@ -176,6 +178,10 @@ export default function HomePage() {
 
           if (uploadError) throw uploadError;
 
+          // Get public URL for this file
+          const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(filePath);
+          urls.push(urlData.publicUrl);
+
           await supabase.from('expense_attachments').insert({
             item_id: item.id,
             file_name: file.name,
@@ -184,6 +190,7 @@ export default function HomePage() {
             mime_type: file.type,
           });
         }
+        rowFileUrls.push(urls);
       }
 
       // Sync to Google Sheets (best-effort, don't block submission)
@@ -193,7 +200,7 @@ export default function HomePage() {
           cash: 'Efectivo',
           personal_card: 'Tarjeta personal',
         };
-        const sheetsPayload = rows.map((row) => {
+        const sheetsPayload = rows.map((row, idx) => {
           // Resolve area name
           let areaName = '';
           let divisionName = '';
@@ -219,6 +226,7 @@ export default function HomePage() {
             client: client?.name || row.client_other || '',
             payment_method: paymentLabels[row.payment_method] || row.payment_method,
             description: row.description.trim(),
+            file_urls: rowFileUrls[idx] || [],
           };
         });
         fetch('/api/sync-sheets', {
