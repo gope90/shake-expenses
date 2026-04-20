@@ -39,17 +39,22 @@ export default function HistorialPage() {
   const [filterStatus, setFilterStatus] = useState('');
   const [userName, setUserName] = useState('');
   const [nameConfirmed, setNameConfirmed] = useState(false);
-  const [knownNames, setKnownNames] = useState<string[]>([]);
+  const [teamNames, setTeamNames] = useState<string[]>([]);
 
   useEffect(() => {
-    // Try to load saved name
     const saved = localStorage.getItem('shake_expense_name');
     if (saved) {
       setUserName(saved);
       setNameConfirmed(true);
     }
-    const names = JSON.parse(localStorage.getItem('shake_expense_known_names') || '[]');
-    setKnownNames(names);
+    supabase
+      .from('team_members')
+      .select('name')
+      .eq('active', true)
+      .order('name')
+      .then(({ data }) => {
+        if (data) setTeamNames(data.map((t: { name: string }) => t.name));
+      });
   }, []);
 
   useEffect(() => {
@@ -136,12 +141,13 @@ export default function HistorialPage() {
             value={userName}
             onChange={(e) => setUserName(e.target.value)}
             placeholder="Nombre y apellido"
-            list="known-names-historial"
+            list="team-names-historial"
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none mb-4"
             required
+            autoComplete="off"
           />
-          <datalist id="known-names-historial">
-            {knownNames.map((name) => (
+          <datalist id="team-names-historial">
+            {teamNames.map((name) => (
               <option key={name} value={name} />
             ))}
           </datalist>

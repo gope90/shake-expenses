@@ -10,6 +10,8 @@ export type Division = {
   name: string;
   sort_order: number;
   active: boolean;
+  last_modified_by?: string | null;
+  updated_at?: string | null;
 };
 
 export type Area = {
@@ -18,6 +20,8 @@ export type Area = {
   name: string;
   sort_order: number;
   active: boolean;
+  last_modified_by?: string | null;
+  updated_at?: string | null;
   divisions?: Division;
 };
 
@@ -25,6 +29,39 @@ export type Client = {
   id: string;
   name: string;
   active: boolean;
+  last_modified_by?: string | null;
+  updated_at?: string | null;
+};
+
+export type AuditLogEntry = {
+  id: string;
+  table_name: 'divisions' | 'areas' | 'clients' | 'team_members';
+  row_id: string;
+  action: 'INSERT' | 'UPDATE' | 'DELETE';
+  actor: string | null;
+  changes: {
+    before?: Record<string, any>;
+    after?: Record<string, any>;
+    diff?: Record<string, { from: any; to: any }>;
+  };
+  created_at: string;
+};
+
+export type AdminUser = {
+  id: string;
+  name: string;
+  email: string;
+  created_at: string;
+};
+
+export type TeamMember = {
+  id: string;
+  name: string;
+  email?: string | null;
+  active: boolean;
+  last_modified_by?: string | null;
+  updated_at?: string | null;
+  created_at?: string;
 };
 
 export type ExpenseItem = {

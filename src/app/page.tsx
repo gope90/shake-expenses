@@ -29,23 +29,20 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState('');
-  const [knownNames, setKnownNames] = useState<string[]>([]);
+  const [teamNames, setTeamNames] = useState<string[]>([]);
 
   useEffect(() => {
     loadCatalogs();
-    // Load remembered name
     const saved = localStorage.getItem('shake_expense_name');
     if (saved) setSubmittedBy(saved);
-    // Load known names
-    const names = JSON.parse(localStorage.getItem('shake_expense_known_names') || '[]');
-    setKnownNames(names);
   }, []);
 
   async function loadCatalogs() {
-    const [divisionsRes, areasRes, clientsRes] = await Promise.all([
+    const [divisionsRes, areasRes, clientsRes, teamRes] = await Promise.all([
       supabase.from('divisions').select('*').eq('active', true).order('sort_order'),
       supabase.from('areas').select('*').eq('active', true).order('sort_order'),
       supabase.from('clients').select('*').eq('active', true).order('name'),
+      supabase.from('team_members').select('name').eq('active', true).order('name'),
     ]);
 
     if (divisionsRes.data && areasRes.data) {
@@ -58,6 +55,10 @@ export default function HomePage() {
 
     if (clientsRes.data) {
       setClients(clientsRes.data);
+    }
+
+    if (teamRes.data) {
+      setTeamNames(teamRes.data.map((t: { name: string }) => t.name));
     }
   }
 
@@ -236,11 +237,8 @@ export default function HomePage() {
         }).catch(() => {}); // fire-and-forget
       } catch {}
 
-      // Save name for future use
+      // Save name for future use (local cache, no longer the source for suggestions)
       localStorage.setItem('shake_expense_name', submittedBy.trim());
-      const updatedNames = Array.from(new Set([...knownNames, submittedBy.trim()]));
-      localStorage.setItem('shake_expense_known_names', JSON.stringify(updatedNames));
-      setKnownNames(updatedNames);
 
       setSuccess(true);
       setRows([createEmptyRow()]);
@@ -293,15 +291,19 @@ export default function HomePage() {
             value={submittedBy}
             onChange={(e) => setSubmittedBy(e.target.value)}
             placeholder="Nombre y apellido"
-            list="known-names"
+            list="team-names"
             className="w-full sm:w-80 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none"
             required
+            autoComplete="off"
           />
-          <datalist id="known-names">
-            {knownNames.map((name) => (
+          <datalist id="team-names">
+            {teamNames.map((name) => (
               <option key={name} value={name} />
             ))}
           </datalist>
+          <p className="text-xs text-gray-400 mt-1">
+            Escribí tu nombre o elegilo de la lista.
+          </p>
         </div>
 
         {/* Expense rows */}

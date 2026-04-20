@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { supabase, ExpenseSubmission } from '@/lib/supabase';
+import { useAdminGuard, adminSignOut } from '@/lib/adminGuard';
 import Link from 'next/link';
 import * as XLSX from 'xlsx';
 
@@ -27,34 +28,68 @@ const PAYMENT_LABELS: Record<string, string> = {
 };
 
 export default function AdminPage() {
-  const [authenticated, setAuthenticated] = useState(false);
-  const [password, setPassword] = useState('');
+  const { admin, loading: authLoading, rejected } = useAdminGuard(false);
+
+  // Login form state
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loginBusy, setLoginBusy] = useState(false);
+
+  // Change password modal
+  const [showChangePw, setShowChangePw] = useState(false);
+  const [newPw, setNewPw] = useState('');
+  const [newPwConfirm, setNewPwConfirm] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+
+  // Panel state
   const [submissions, setSubmissions] = useState<SubmissionFull[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  function handleLogin(e: React.FormEvent) {
+  useEffect(() => {
+    if (admin) loadSubmissions();
+  }, [admin]);
+
+  async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
-    // Simple password check - the real password is in env var on server
-    // For client-side demo, we hardcode it (in production use a server action)
-    if (password === 'shakeagain2024') {
-      setAuthenticated(true);
-      localStorage.setItem('shake_admin_auth', 'true');
+    setLoginError('');
+    setLoginBusy(true);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: loginEmail.trim().toLowerCase(),
+      password: loginPassword,
+    });
+    setLoginBusy(false);
+    if (error) {
+      setLoginError(error.message === 'Invalid login credentials' ? 'Email o clave incorrectos.' : error.message);
     } else {
-      alert('Clave incorrecta');
+      setLoginPassword('');
     }
   }
 
-  useEffect(() => {
-    if (localStorage.getItem('shake_admin_auth') === 'true') {
-      setAuthenticated(true);
+  async function handleChangePassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (newPw.length < 8) {
+      alert('La clave nueva tiene que tener al menos 8 caracteres.');
+      return;
     }
-  }, []);
-
-  useEffect(() => {
-    if (authenticated) loadSubmissions();
-  }, [authenticated]);
+    if (newPw !== newPwConfirm) {
+      alert('Las claves no coinciden.');
+      return;
+    }
+    setPwBusy(true);
+    const { error } = await supabase.auth.updateUser({ password: newPw });
+    setPwBusy(false);
+    if (error) {
+      alert(`Error: ${error.message}`);
+    } else {
+      alert('Clave actualizada correctamente.');
+      setShowChangePw(false);
+      setNewPw('');
+      setNewPwConfirm('');
+    }
+  }
 
   async function loadSubmissions() {
     setLoading(true);
@@ -75,7 +110,9 @@ export default function AdminPage() {
     if (sub && !sub.items) {
       const { data: items } = await supabase
         .from('expense_items')
-        .select(`*, areas ( name, divisions:division_id ( name ) ), clients ( name ), expense_attachments ( id, file_name, file_path )`)
+        .select(
+          `*, areas ( name, divisions:division_id ( name ) ), clients ( name ), expense_attachments ( id, file_name, file_path )`
+        )
         .eq('submission_id', id)
         .order('expense_date');
       if (items) {
@@ -87,15 +124,18 @@ export default function AdminPage() {
     setExpandedId(id);
   }
 
-  async function updateStatus(id: string, status: 'approved' | 'rejected', notes?: string) {
+  async function updateStatus(id: string, status: 'approved' | 'rejected') {
+    if (!admin) return;
     setActionLoading(id);
-    const reviewNotes = status === 'rejected' ? prompt('Motivo del rechazo (opcional):') || '' : '';
+    const reviewNotes =
+      status === 'rejected' ? prompt('Motivo del rechazo (opcional):') || '' : '';
+    const reviewer = admin.email;
 
     const { error } = await supabase
       .from('expense_submissions')
       .update({
         status,
-        reviewed_by: 'Admin',
+        reviewed_by: reviewer,
         reviewed_at: new Date().toISOString(),
         notes: reviewNotes || null,
       })
@@ -106,11 +146,16 @@ export default function AdminPage() {
       setSubmissions((prev) =>
         prev.map((s) =>
           s.id === id
-            ? { ...s, status, reviewed_by: 'Admin', reviewed_at: new Date().toISOString(), notes: reviewNotes || null }
+            ? {
+                ...s,
+                status,
+                reviewed_by: reviewer,
+                reviewed_at: new Date().toISOString(),
+                notes: reviewNotes || null,
+              }
             : s
         )
       );
-      // Sync status to Google Sheets (fire-and-forget)
       if (sub) {
         fetch('/api/sync-sheets-status', {
           method: 'POST',
@@ -122,6 +167,8 @@ export default function AdminPage() {
           }),
         }).catch(() => {});
       }
+    } else {
+      alert(`Error: ${error.message}`);
     }
     setActionLoading(null);
   }
@@ -132,15 +179,11 @@ export default function AdminPage() {
   }
 
   async function exportToExcel() {
-    // Fetch all items with details for export
     const { data: items } = await supabase
       .from('expense_items')
-      .select(`
-        *,
-        expense_submissions!inner ( submitted_by, submitted_at, status ),
-        areas ( name, divisions:division_id ( name ) ),
-        clients ( name )
-      `)
+      .select(
+        `*, expense_submissions!inner ( submitted_by, submitted_at, status ), areas ( name, divisions:division_id ( name ) ), clients ( name )`
+      )
       .order('expense_date', { ascending: false });
 
     if (!items || items.length === 0) {
@@ -151,25 +194,35 @@ export default function AdminPage() {
     const rows = items.map((item: any) => ({
       'Fecha gasto': item.expense_date,
       'Enviado por': item.expense_submissions?.submitted_by || '',
-      'Fecha envío': item.expense_submissions?.submitted_at ? new Date(item.expense_submissions.submitted_at).toLocaleDateString('es-AR') : '',
-      'Estado': item.expense_submissions?.status === 'approved' ? 'Aprobado' : item.expense_submissions?.status === 'rejected' ? 'Rechazado' : 'Pendiente',
-      'Proveedor': item.provider,
-      'Monto': Number(item.amount),
-      'Moneda': item.currency,
-      'División': item.areas?.divisions?.name || '',
-      'Área': item.areas?.name || '',
-      'Cliente': item.clients?.name || '',
+      'Fecha envío': item.expense_submissions?.submitted_at
+        ? new Date(item.expense_submissions.submitted_at).toLocaleDateString('es-AR')
+        : '',
+      Estado:
+        item.expense_submissions?.status === 'approved'
+          ? 'Aprobado'
+          : item.expense_submissions?.status === 'rejected'
+          ? 'Rechazado'
+          : 'Pendiente',
+      Proveedor: item.provider,
+      Monto: Number(item.amount),
+      Moneda: item.currency,
+      División: item.areas?.divisions?.name || '',
+      Área: item.areas?.name || '',
+      Cliente: item.clients?.name || '',
       'Medio de pago': PAYMENT_LABELS[item.payment_method] || item.payment_method,
-      'Descripción': item.description,
+      Descripción: item.description,
     }));
 
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Gastos');
-
-    // Auto-width columns
     const colWidths = Object.keys(rows[0]).map((key) => ({
-      wch: Math.max(key.length, ...rows.map((r: any) => String(r[key] || '').length)).toString().length + 4,
+      wch:
+        Math.max(
+          key.length,
+          ...rows.map((r: any) => String(r[key] || '').length)
+        )
+          .toString().length + 4,
     }));
     ws['!cols'] = colWidths;
 
@@ -177,30 +230,76 @@ export default function AdminPage() {
     XLSX.writeFile(wb, `gastos-shake-${today}.xlsx`);
   }
 
-  if (!authenticated) {
+  // Loading inicial
+  if (authLoading) {
+    return <div className="text-center py-20 text-gray-400">Cargando...</div>;
+  }
+
+  // No logueado: mostrar login
+  if (!admin && !rejected) {
     return (
       <div className="max-w-sm mx-auto mt-20">
         <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">
           Panel de administración
         </h1>
-        <form onSubmit={handleLogin} className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Clave de acceso
-          </label>
+        <form
+          onSubmit={handleLogin}
+          className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm"
+        >
+          <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+          <input
+            type="email"
+            value={loginEmail}
+            onChange={(e) => setLoginEmail(e.target.value)}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none mb-4"
+            placeholder="nombre@shakeagain.com"
+            autoComplete="email"
+            required
+          />
+          <label className="block text-sm font-medium text-gray-700 mb-2">Contraseña</label>
           <input
             type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            value={loginPassword}
+            onChange={(e) => setLoginPassword(e.target.value)}
             className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none mb-4"
-            placeholder="Ingresá la clave"
+            placeholder="Tu contraseña"
+            autoComplete="current-password"
+            required
           />
+          {loginError && (
+            <div className="mb-4 text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg p-2">
+              {loginError}
+            </div>
+          )}
           <button
             type="submit"
-            className="w-full py-2.5 bg-brand-500 text-white font-semibold rounded-lg hover:bg-brand-600 transition-colors text-sm"
+            disabled={loginBusy}
+            className="w-full py-2.5 bg-brand-500 text-white font-semibold rounded-lg hover:bg-brand-600 transition-colors text-sm disabled:opacity-50"
           >
-            Ingresar
+            {loginBusy ? 'Ingresando...' : 'Ingresar'}
           </button>
+          <p className="text-xs text-gray-400 mt-3 text-center">
+            Si es tu primera vez, usá la contraseña temporal que te pasaron. Luego podés cambiarla desde el panel.
+          </p>
         </form>
+      </div>
+    );
+  }
+
+  // Logueado pero no es admin
+  if (rejected) {
+    return (
+      <div className="max-w-md mx-auto mt-20 text-center">
+        <h1 className="text-xl font-bold text-gray-900 mb-4">No tenés permisos de administrador</h1>
+        <p className="text-sm text-gray-500 mb-6">
+          Tu cuenta está autenticada pero no figura en la lista de administradores. Contactá a Shake Again si creés que es un error.
+        </p>
+        <button
+          onClick={adminSignOut}
+          className="px-4 py-2 text-sm text-red-500 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+        >
+          Cerrar sesión
+        </button>
       </div>
     );
   }
@@ -213,7 +312,12 @@ export default function AdminPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Panel de administración</h1>
           <p className="text-gray-500 mt-1">
-            Aprobá o rechazá rendiciones de gastos.
+            Aprobá o rechazá rendiciones de gastos.{' '}
+            {admin && (
+              <>
+                Conectado como <strong>{admin.name}</strong> ({admin.email}).
+              </>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
@@ -223,29 +327,82 @@ export default function AdminPage() {
           >
             Exportar a Excel
           </button>
-          <Link
-            href="/admin/clientes"
-            className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            Gestionar clientes
+          <Link href="/admin/clientes" className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+            Clientes
           </Link>
-          <Link
-            href="/admin/areas"
-            className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            Gestionar áreas
+          <Link href="/admin/areas" className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+            Áreas
+          </Link>
+          <Link href="/admin/equipo" className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+            Equipo
+          </Link>
+          <Link href="/admin/auditoria" className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+            Auditoría
           </Link>
           <button
-            onClick={() => {
-              localStorage.removeItem('shake_admin_auth');
-              setAuthenticated(false);
-            }}
+            onClick={() => setShowChangePw(true)}
+            className="px-4 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            Cambiar clave
+          </button>
+          <button
+            onClick={adminSignOut}
             className="px-4 py-2 text-sm text-red-500 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
           >
             Salir
           </button>
         </div>
       </div>
+
+      {showChangePw && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleChangePassword}
+            className="bg-white rounded-xl shadow-xl p-6 w-full max-w-sm"
+          >
+            <h3 className="text-lg font-semibold mb-4">Cambiar contraseña</h3>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nueva contraseña</label>
+            <input
+              type="password"
+              value={newPw}
+              onChange={(e) => setNewPw(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm mb-3"
+              minLength={8}
+              required
+              autoFocus
+            />
+            <label className="block text-sm font-medium text-gray-700 mb-1">Repetí la contraseña</label>
+            <input
+              type="password"
+              value={newPwConfirm}
+              onChange={(e) => setNewPwConfirm(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm mb-4"
+              minLength={8}
+              required
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowChangePw(false);
+                  setNewPw('');
+                  setNewPwConfirm('');
+                }}
+                className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={pwBusy}
+                className="px-4 py-2 text-sm bg-brand-500 text-white rounded-lg hover:bg-brand-600 disabled:opacity-50"
+              >
+                {pwBusy ? 'Guardando...' : 'Guardar'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4 mb-8">
@@ -290,21 +447,42 @@ export default function AdminPage() {
                     <p className="text-sm font-semibold text-gray-900">{sub.submitted_by}</p>
                     <p className="text-xs text-gray-400">
                       {new Date(sub.submitted_at).toLocaleDateString('es-AR', {
-                        day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
-                      })} &middot; {sub.item_count} gasto{sub.item_count !== 1 ? 's' : ''}
+                        day: '2-digit',
+                        month: 'short',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}{' '}
+                      &middot; {sub.item_count} gasto{sub.item_count !== 1 ? 's' : ''}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="text-right">
-                      {sub.total_ars > 0 && <p className="text-sm font-medium">${Number(sub.total_ars).toLocaleString('es-AR', { minimumFractionDigits: 2 })} ARS</p>}
-                      {sub.total_usd > 0 && <p className="text-sm font-medium">US${Number(sub.total_usd).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>}
+                      {sub.total_ars > 0 && (
+                        <p className="text-sm font-medium">
+                          ${Number(sub.total_ars).toLocaleString('es-AR', { minimumFractionDigits: 2 })} ARS
+                        </p>
+                      )}
+                      {sub.total_usd > 0 && (
+                        <p className="text-sm font-medium">
+                          US${Number(sub.total_usd).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </p>
+                      )}
                     </div>
-                    <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
-                      sub.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                      sub.status === 'approved' ? 'bg-green-100 text-green-700' :
-                      'bg-red-100 text-red-700'
-                    }`}>
-                      {sub.status === 'pending' ? 'Pendiente' : sub.status === 'approved' ? 'Aprobado' : 'Rechazado'}
+                    <span
+                      className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                        sub.status === 'pending'
+                          ? 'bg-yellow-100 text-yellow-700'
+                          : sub.status === 'approved'
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-red-100 text-red-700'
+                      }`}
+                    >
+                      {sub.status === 'pending'
+                        ? 'Pendiente'
+                        : sub.status === 'approved'
+                        ? 'Aprobado'
+                        : 'Rechazado'}
                     </span>
                     <span className="text-gray-400 text-xs">{isExpanded ? '▲' : '▼'}</span>
                   </div>
@@ -325,22 +503,33 @@ export default function AdminPage() {
                               <p className="text-sm font-medium">{item.provider}</p>
                               <p className="text-xs text-gray-500">
                                 {new Date(item.expense_date + 'T00:00:00').toLocaleDateString('es-AR')} &middot;{' '}
-                                {item.areas ? `${(item.areas as any).divisions?.name} → ${item.areas.name}` : '-'} &middot;{' '}
-                                {PAYMENT_LABELS[item.payment_method]}
+                                {item.areas
+                                  ? `${(item.areas as any).divisions?.name} → ${item.areas.name}`
+                                  : '-'}{' '}
+                                &middot; {PAYMENT_LABELS[item.payment_method]}
                                 {item.clients && <> &middot; {item.clients.name}</>}
                               </p>
                             </div>
                             <p className="text-sm font-semibold">
                               {item.currency === 'ARS' ? '$' : 'US$'}
-                              {Number(item.amount).toLocaleString(item.currency === 'ARS' ? 'es-AR' : 'en-US', { minimumFractionDigits: 2 })} {item.currency}
+                              {Number(item.amount).toLocaleString(
+                                item.currency === 'ARS' ? 'es-AR' : 'en-US',
+                                { minimumFractionDigits: 2 }
+                              )}{' '}
+                              {item.currency}
                             </p>
                           </div>
                           <p className="text-sm text-gray-600 mb-2">{item.description}</p>
                           {item.expense_attachments?.length > 0 && (
                             <div className="flex flex-wrap gap-2">
                               {item.expense_attachments.map((att) => (
-                                <a key={att.id} href={getFileUrl(att.file_path)} target="_blank" rel="noopener noreferrer"
-                                  className="text-xs text-brand-500 hover:text-brand-700 underline">
+                                <a
+                                  key={att.id}
+                                  href={getFileUrl(att.file_path)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-brand-500 hover:text-brand-700 underline"
+                                >
                                   {att.file_name}
                                 </a>
                               ))}

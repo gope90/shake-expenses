@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { supabase, Client } from '@/lib/supabase';
+import { supabase, TeamMember } from '@/lib/supabase';
 import { useAdminGuard } from '@/lib/adminGuard';
 import Link from 'next/link';
 
@@ -17,56 +17,62 @@ function formatStamp(iso?: string | null): string {
   });
 }
 
-export default function ClientesPage() {
+export default function EquipoPage() {
   const { admin, loading: authLoading } = useAdminGuard();
-  const [clients, setClients] = useState<Client[]>([]);
+  const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
+  const [newEmail, setNewEmail] = useState('');
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
-  const [search, setSearch] = useState('');
 
   const adminActor = admin?.email || '';
 
   useEffect(() => {
-    if (admin) loadClients();
+    if (admin) loadMembers();
   }, [admin]);
 
-  async function loadClients() {
+  async function loadMembers() {
     setLoading(true);
-    const { data } = await supabase.from('clients').select('*').order('name');
-    if (data) setClients(data);
+    const { data } = await supabase
+      .from('team_members')
+      .select('*')
+      .order('name');
+    if (data) setMembers(data);
     setLoading(false);
   }
 
   function humanizeError(message: string): string {
     if (/duplicate key|unique/i.test(message)) {
-      return 'Ya existe un cliente con ese nombre.';
+      return 'Ya existe un miembro con ese email.';
     }
     return message;
   }
 
-  async function addClient(e: React.FormEvent) {
+  async function addMember(e: React.FormEvent) {
     e.preventDefault();
     if (!newName.trim()) return;
     setSaving(true);
-    const { error } = await supabase
-      .from('clients')
-      .insert({ name: newName.trim(), last_modified_by: adminActor });
+    const { error } = await supabase.from('team_members').insert({
+      name: newName.trim(),
+      email: newEmail.trim() || null,
+      last_modified_by: adminActor,
+    });
     if (error) {
       alert(`Error: ${humanizeError(error.message)}`);
     } else {
       setNewName('');
-      loadClients();
+      setNewEmail('');
+      loadMembers();
     }
     setSaving(false);
   }
 
-  async function renameClient(id: string) {
+  async function renameMember(id: string) {
     const newTrimmed = editingName.trim();
     if (!newTrimmed) return;
-    const current = clients.find((c) => c.id === id);
+    const current = members.find((m) => m.id === id);
     if (!current) return;
     if (newTrimmed === current.name) {
       setEditingId(null);
@@ -74,7 +80,7 @@ export default function ClientesPage() {
     }
     setSaving(true);
     const { error } = await supabase
-      .from('clients')
+      .from('team_members')
       .update({ name: newTrimmed, last_modified_by: adminActor })
       .eq('id', id);
     setSaving(false);
@@ -83,25 +89,21 @@ export default function ClientesPage() {
     } else {
       setEditingId(null);
       setEditingName('');
-      loadClients();
+      loadMembers();
     }
   }
 
   async function toggleActive(id: string, current: boolean) {
     const { error } = await supabase
-      .from('clients')
+      .from('team_members')
       .update({ active: !current, last_modified_by: adminActor })
       .eq('id', id);
     if (error) {
       alert(`Error: ${humanizeError(error.message)}`);
     } else {
-      loadClients();
+      loadMembers();
     }
   }
-
-  const filtered = search.trim()
-    ? clients.filter((c) => c.name.toLowerCase().includes(search.trim().toLowerCase()))
-    : clients;
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -109,20 +111,30 @@ export default function ClientesPage() {
         <Link href="/admin" className="text-brand-500 hover:text-brand-700 text-sm">
           ← Volver
         </Link>
-        <h1 className="text-2xl font-bold text-gray-900">Gestionar clientes</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Equipo</h1>
         {admin && (
           <span className="ml-auto text-xs text-gray-400">Conectado como {admin.name}</span>
         )}
       </div>
 
-      {/* Add new */}
-      <form onSubmit={addClient} className="flex gap-3 mb-4">
+      <p className="text-sm text-gray-500 mb-6">
+        Los nombres cargados acá aparecen como sugerencia cuando alguien ingresa su nombre al cargar un gasto.
+      </p>
+
+      <form onSubmit={addMember} className="flex flex-wrap gap-3 mb-6">
         <input
           type="text"
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
-          placeholder="Nombre del nuevo cliente"
-          className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none"
+          placeholder="Nombre y apellido"
+          className="flex-1 min-w-[200px] rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none"
+        />
+        <input
+          type="email"
+          value={newEmail}
+          onChange={(e) => setNewEmail(e.target.value)}
+          placeholder="Email (opcional)"
+          className="flex-1 min-w-[200px] rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none"
         />
         <button
           type="submit"
@@ -133,31 +145,22 @@ export default function ClientesPage() {
         </button>
       </form>
 
-      {/* Search */}
-      <input
-        type="text"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Buscar cliente..."
-        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none mb-6 bg-white"
-      />
-
       {authLoading || loading ? (
         <div className="text-center py-12 text-gray-400">Cargando...</div>
-      ) : filtered.length === 0 ? (
+      ) : members.length === 0 ? (
         <div className="text-center py-8 text-gray-400 text-sm">
-          {search ? 'No hay clientes que coincidan con la búsqueda.' : 'No hay clientes cargados.'}
+          Todavía no hay miembros cargados.
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 shadow-sm divide-y divide-gray-100">
-          {filtered.map((client) => (
+          {members.map((m) => (
             <div
-              key={client.id}
+              key={m.id}
               className={`flex items-center justify-between px-5 py-3 gap-3 ${
-                !client.active ? 'opacity-50' : ''
+                !m.active ? 'opacity-50' : ''
               }`}
             >
-              {editingId === client.id ? (
+              {editingId === m.id ? (
                 <div className="flex gap-2 flex-1">
                   <input
                     type="text"
@@ -165,7 +168,7 @@ export default function ClientesPage() {
                     onChange={(e) => setEditingName(e.target.value)}
                     autoFocus
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') renameClient(client.id);
+                      if (e.key === 'Enter') renameMember(m.id);
                       if (e.key === 'Escape') {
                         setEditingId(null);
                         setEditingName('');
@@ -174,7 +177,7 @@ export default function ClientesPage() {
                     className="flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none"
                   />
                   <button
-                    onClick={() => renameClient(client.id)}
+                    onClick={() => renameMember(m.id)}
                     disabled={saving}
                     className="px-3 py-1.5 text-xs bg-brand-500 text-white rounded-lg hover:bg-brand-600 disabled:opacity-50"
                   >
@@ -193,35 +196,36 @@ export default function ClientesPage() {
               ) : (
                 <>
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm text-gray-900">{client.name}</span>
-                    {(client.last_modified_by || client.updated_at) && (
+                    <p className="text-sm text-gray-900">{m.name}</p>
+                    {m.email && <p className="text-xs text-gray-400">{m.email}</p>}
+                    {(m.last_modified_by || m.updated_at) && (
                       <p className="text-xs text-gray-400 mt-0.5">
-                        {client.last_modified_by && (
-                          <>Editado por <span className="font-medium text-gray-500">{client.last_modified_by}</span></>
+                        {m.last_modified_by && (
+                          <>Editado por <span className="font-medium text-gray-500">{m.last_modified_by}</span></>
                         )}
-                        {client.updated_at && <> · {formatStamp(client.updated_at)}</>}
+                        {m.updated_at && <> · {formatStamp(m.updated_at)}</>}
                       </p>
                     )}
                   </div>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => {
-                        setEditingId(client.id);
-                        setEditingName(client.name);
+                        setEditingId(m.id);
+                        setEditingName(m.name);
                       }}
                       className="text-xs text-brand-500 hover:text-brand-700"
                     >
                       Editar
                     </button>
                     <button
-                      onClick={() => toggleActive(client.id, client.active)}
+                      onClick={() => toggleActive(m.id, m.active)}
                       className={`text-xs px-3 py-1 rounded-full transition-colors ${
-                        client.active
+                        m.active
                           ? 'bg-green-100 text-green-700 hover:bg-green-200'
                           : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                       }`}
                     >
-                      {client.active ? 'Activo' : 'Inactivo'}
+                      {m.active ? 'Activo' : 'Inactivo'}
                     </button>
                   </div>
                 </>
@@ -232,7 +236,7 @@ export default function ClientesPage() {
       )}
 
       <p className="text-xs text-gray-400 mt-4 text-center">
-        {clients.length} clientes en total · {clients.filter((c) => c.active).length} activos
+        {members.length} miembro{members.length !== 1 ? 's' : ''} · {members.filter((m) => m.active).length} activos
       </p>
     </div>
   );

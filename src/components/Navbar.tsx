@@ -1,14 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useAdminGuard } from '@/lib/adminGuard';
 
 export default function Navbar() {
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  useEffect(() => {
-    setIsAdmin(localStorage.getItem('shake_admin_auth') === 'true');
-  }, []);
+  const { admin } = useAdminGuard(false);
 
   return (
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-50">
@@ -31,7 +27,7 @@ export default function Navbar() {
               >
                 Mis gastos
               </Link>
-              {isAdmin && (
+              {admin && (
                 <Link
                   href="/admin"
                   className="text-sm text-gray-600 hover:text-brand-500 transition-colors"
